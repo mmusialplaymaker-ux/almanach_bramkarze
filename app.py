@@ -1322,16 +1322,6 @@ def main():
         sel_pid = sel_card
         select_mode = "ignore"
     else:
-        # wybór zawodnika z listy → zawęża analitykę, podsumowanie i mecze do niego
-        _opts = f.sort_values("PM_Index", ascending=False)[["player_id", "zawodnik", "club_name"]]
-        _labels = ["— wszyscy zawodnicy —"] + [f"{r.zawodnik} ({r.club_name})" for r in _opts.itertuples()]
-        _ids = [None] + list(_opts["player_id"])
-        _pick = st.selectbox("🔍 Zawęź do zawodnika (mecze i podsumowanie)",
-                             range(len(_labels)), format_func=lambda i: _labels[i],
-                             key="pick_zawodnik")
-        if _pick and _ids[_pick]:
-            st.session_state["sel_pid"] = _ids[_pick]
-            st.rerun()
         ftab = ft
         sel_pid = None
         select_mode = "rerun"
@@ -1349,11 +1339,13 @@ def main():
 
     ed = ftab.set_index("player_id").copy()
     ed.insert(0, "🧺", ed.index.isin(_cart))
-    disp = ed[["🧺"] + [c for c in cmap if c in ed.columns]].rename(columns=cmap)
+    ed.insert(0, "🔍", False)
+    disp = ed[["🔍", "🧺"] + [c for c in cmap if c in ed.columns]].rename(columns=cmap)
     edited = st.data_editor(
         disp, use_container_width=True, height=285, hide_index=True,
-        disabled=[c for c in disp.columns if c != "🧺"], key=K("editor"),
+        disabled=[c for c in disp.columns if c not in ("🔍", "🧺")], key=K("editor"),
         column_config={
+            "🔍": st.column_config.CheckboxColumn("🔍", help="pokaż mecze i podsumowanie tego zawodnika", default=False),
             "🧺": st.column_config.CheckboxColumn("🧺", help="dodaj do koszyka zaproszeń", default=False),
             "PM Index": st.column_config.NumberColumn(format="%.2f", help=PM_HELP),
             "Score (liga)": st.column_config.NumberColumn(format="%.3f"),
@@ -1362,6 +1354,12 @@ def main():
             "Premia": st.column_config.NumberColumn(format="%.2f"),
             "Znaczniki": st.column_config.TextColumn(
                 help="↑ gra ze starszymi · 🪑 w kadrze seniorów · ⚽ minuty w seniorach · 🏅 minuty w CLJ")})
+    # zawężenie do zawodnika klikiem 🔍 (jak koszyk) → ustawia sel_pid i przeładowuje
+    _narrow = list(edited.index[edited["🔍"] == True]) if "🔍" in edited.columns else []
+    if _narrow:
+        st.session_state["sel_pid"] = _narrow[0]
+        st.rerun()
+
     # synchronizacja koszyka: tylko widoczne wiersze mogą zmienić stan
     _visible = set(ed.index)
     _checked = set(edited.index[edited["🧺"] == True]) if "🧺" in edited.columns else set()
