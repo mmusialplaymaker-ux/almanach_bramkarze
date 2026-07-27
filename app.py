@@ -835,7 +835,15 @@ def build(_stats, _matches):
         df["keeper_count"] = df["player_id"].map(kc).fillna(0)
     else:
         df["keeper_count"] = 0
-    df["is_gk"] = (df["keeper_count"] >= 3) | (df["keeper_count"] >= 0.4 * df["mecze_total"].fillna(0))
+    # BRAMKARZ = gra w bramce WIĘKSZOŚĆ meczów i NIE jest strzelcem (napastnik z 1 meczem w bramce to nie bramkarz)
+    _min_keeper = float(_secret("PM_BRAMKARZ_MIN_KEEPER", "5") or 5)
+    _min_frac = float(_secret("PM_BRAMKARZ_MIN_FRAKCJA", "0.5") or 0.5)
+    _max_gole = float(_secret("PM_BRAMKARZ_MAX_GOLE", "5") or 5)
+    _mecze_gk = pd.to_numeric(df.get("mecze_total"), errors="coerce").fillna(0).clip(lower=1)
+    _gole_gk = pd.to_numeric(df.get("gole_total"), errors="coerce").fillna(0)
+    df["is_gk"] = ((df["keeper_count"] >= _min_keeper)
+                   & (df["keeper_count"] >= _min_frac * _mecze_gk)
+                   & (_gole_gk <= _max_gole))
 
     if _secret("PM_TYLKO_BRAMKARZE", "") in ("1", "true", "True"):
         df = df[df["is_gk"]].reset_index(drop=True)
@@ -1301,6 +1309,7 @@ def main():
         cc[0].success(f"Wybrany zawodnik: **{who}** — analityka i mecze zawężone do niego.")
         if cc[1].button("← Pokaż wszystkich", use_container_width=True):
             st.session_state.pop("sel_pid", None)
+            st.session_state.pop("pick_zawodnik", None)
             st.rerun()
         _prow = f.loc[f["player_id"] == sel_card].iloc[0]
         _pdf = _zaproszenie_pdf(who, str(_prow.get("est_birth_year", "") or "").split(".")[0],
@@ -1313,6 +1322,16 @@ def main():
         sel_pid = sel_card
         select_mode = "ignore"
     else:
+        # wybór zawodnika z listy → zawęża analitykę, podsumowanie i mecze do niego
+        _opts = f.sort_values("PM_Index", ascending=False)[["player_id", "zawodnik", "club_name"]]
+        _labels = ["— wszyscy zawodnicy —"] + [f"{r.zawodnik} ({r.club_name})" for r in _opts.itertuples()]
+        _ids = [None] + list(_opts["player_id"])
+        _pick = st.selectbox("🔍 Zawęź do zawodnika (mecze i podsumowanie)",
+                             range(len(_labels)), format_func=lambda i: _labels[i],
+                             key="pick_zawodnik")
+        if _pick and _ids[_pick]:
+            st.session_state["sel_pid"] = _ids[_pick]
+            st.rerun()
         ftab = ft
         sel_pid = None
         select_mode = "rerun"
