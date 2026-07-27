@@ -674,6 +674,31 @@ _MALE_A = {"kuba", "barnaba", "bonawentura", "kosma", "dyzma", "jarema", "luka",
            "mikita", "danila", "ilia", "kola", "sasza", "borna", "aleksa", "andrea", "nikola"}
 
 
+_TIER_PATS = [
+    (r'\bclj\b|centralna liga junior', 1.00),
+    (r'makroregion|ekstralig', 0.90),
+    (r'\bi\s+liga\s+wojew', 0.80),
+    (r'\bii\s+liga\s+wojew', 0.70),
+    (r'\biii\s+liga\s+wojew', 0.62),
+    (r'\biv\s+liga\s+wojew', 0.56),
+    (r'wojew', 0.60),
+    (r'\bi{1,3}\s+liga\s+okr', 0.48),
+    (r'\biv\s+liga\s+okr', 0.42),
+    (r'\bv\s+liga\s+okr', 0.34),
+    (r'\bvi\s+liga\s+okr', 0.28),
+    (r'okr[eę]g', 0.38),
+]
+
+
+def _poziom_nazwy(play_name):
+    """Szczebel rozgrywek z nazwy (0.2 lokalne … 1.0 CLJ) — odpowiednik leagueMultiplier."""
+    s = str(play_name).lower()
+    for pat, val in _TIER_PATS:
+        if re.search(pat, s):
+            return val
+    return 0.20  # lokalne/miejskie/nieopisane = najniższy szczebel
+
+
 def _is_girl(fullname):
     """Heurystyka płci po imieniu: końcówka -a to zwykle dziewczynka, poza wyjątkami męskimi."""
     fn = str(fullname).strip().split(" ")[0].lower()
@@ -796,10 +821,19 @@ def build(_stats, _matches):
     if PM_RANK_MODE == "talent":
         # mix: jakość (league-aware) + poziom (CLJ/seniorzy/skok) + wolumen
         Q = df["pm_quality"].rank(pct=True)
-        lvl_raw = (df["clj_minutes"].fillna(0) * W_CLJ
-                   + df["senior_minutes"].fillna(0) * W_SENIOR
-                   + df["up2_min"].fillna(0) * W_SKOK)
-        df["Poziom"] = lvl_raw.rank(pct=True)
+        if _secret("PM_POZIOM_Z_NAZWY", "") in ("1", "true", "True"):
+            # poziom = minutowo-ważony szczebel z nazwy rozgrywek (CLJ 1.0 … lokalne 0.2)
+            _mm = _matches.copy()
+            _mm["_tier"] = _mm["play_name"].map(_poziom_nazwy)
+            _mm["_min"] = pd.to_numeric(_mm["minutes"], errors="coerce").fillna(0)
+            _lvl = _mm.groupby("player_id").apply(
+                lambda g: (g["_tier"] * g["_min"]).sum() / max(g["_min"].sum(), 1.0))
+            df["Poziom"] = df["player_id"].map(_lvl).fillna(0.20)
+        else:
+            lvl_raw = (df["clj_minutes"].fillna(0) * W_CLJ
+                       + df["senior_minutes"].fillna(0) * W_SENIOR
+                       + df["up2_min"].fillna(0) * W_SKOK)
+            df["Poziom"] = lvl_raw.rank(pct=True)
         Vol = df["min_total"].fillna(0).rank(pct=True)
         wsum = (W_JAKOSC + W_POZIOM + W_WOLUMEN) or 1.0
         df["PM_base"] = (W_JAKOSC * Q + W_POZIOM * df["Poziom"] + W_WOLUMEN * Vol) / wsum
