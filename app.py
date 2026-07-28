@@ -704,13 +704,17 @@ def _norm_play(pn):
 def _potencjal_clj(clj_min, poziom, min_total, stracone, gra_starsi, play):
     """Flaga + komentarz: potencjał bramkarza na poziom CLJ U-15 (cel naboru).
     Zwraca (flaga, komentarz). Roczniki 2012/2013 w CLJ grają w górę → każde min. CLJ to sygnał."""
-    clj_min = float(clj_min or 0)
-    poziom = float(poziom or 0)
-    min_total = float(min_total or 0)
-    s = float(stracone) if stracone == stracone else None   # NaN-safe
+    def _num(x, d=0.0):
+        v = pd.to_numeric(x, errors="coerce")
+        return float(v) if pd.notna(v) else d
+    clj_min = _num(clj_min)
+    poziom = _num(poziom)
+    min_total = _num(min_total)
+    _s = pd.to_numeric(stracone, errors="coerce")
+    s = float(_s) if pd.notna(_s) else None
     komplet = min_total >= 1300
     malo_str = (s is not None and s < 1.5)
-    liga = str(play or "").strip()
+    gra_starsi = bool(gra_starsi) if gra_starsi == gra_starsi else False
 
     if clj_min >= 400:
         return ("✅ Ograny w CLJ",
@@ -1320,11 +1324,19 @@ def main():
                                 key=K("f_clj"))
         gole_prog = int(float(_secret("PM_GOLE_PROG", "50") or 50))
         pluca_prog = int(float(_secret("PM_PLUCA_PROG", "5000") or 5000))
-        r4 = st.columns(4)
-        f_gole = r4[0].checkbox(f"🎯 >{gole_prog} goli", key=K("f_gole"))
-        f_pluca = r4[1].checkbox(f"🫁 Żelazne płuca (>{pluca_prog}')", key=K("f_pluca"))
-        f_futsal = r4[2].checkbox("🥅 Halowiec (futsal)", key=K("f_futsal"))
-        f_skok2 = r4[3].checkbox("↑↑ Skok 2+ roczniki", key=K("f_skok2"))
+        _bram = _secret("PM_TYLKO_BRAMKARZE", "") in ("1", "true", "True")
+        if _bram:
+            # bramkarze: gole/futsal bez sensu — pokazujemy tylko istotne
+            r4 = st.columns(2)
+            f_gole = f_futsal = False
+            f_pluca = r4[0].checkbox(f"🫁 Żelazne płuca (>{pluca_prog}')", key=K("f_pluca"))
+            f_skok2 = r4[1].checkbox("↑↑ Skok 2+ roczniki", key=K("f_skok2"))
+        else:
+            r4 = st.columns(4)
+            f_gole = r4[0].checkbox(f"🎯 >{gole_prog} goli", key=K("f_gole"))
+            f_pluca = r4[1].checkbox(f"🫁 Żelazne płuca (>{pluca_prog}')", key=K("f_pluca"))
+            f_futsal = r4[2].checkbox("🥅 Halowiec (futsal)", key=K("f_futsal"))
+            f_skok2 = r4[3].checkbox("↑↑ Skok 2+ roczniki", key=K("f_skok2"))
         f_potencjal = False
         if "potencjal" in data.columns and (data["potencjal"].astype(str) != "").any():
             f_potencjal = st.checkbox("🎯 Tylko z potencjałem na CLJ (kandydaci / liznęli CLJ / perły)",
@@ -1452,6 +1464,9 @@ def main():
             "kartki_total": "Kartki", "senior_minutes": "Min. seniorzy",
             "gk_stracone_mecz": "Str./mecz",
             "clj_minutes": "Min. CLJ", "komentarz": "Komentarz"}
+    if _secret("PM_TYLKO_BRAMKARZE", "") in ("1", "true", "True"):
+        for _k in ("gole_play", "gole_total"):   # bramkarze nie strzelają — zbędne kolumny
+            cmap.pop(_k, None)
 
     if sel_card:
         who = f.loc[f["player_id"] == sel_card, "zawodnik"].iloc[0]
