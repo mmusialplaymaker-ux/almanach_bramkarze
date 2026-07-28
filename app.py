@@ -701,6 +701,38 @@ def _norm_play(pn):
     return s
 
 
+def _lvl_bucket(v):
+    if v >= 0.88:
+        return 3          # CLJ / makroregion
+    if v >= 0.55:
+        return 2          # wojewódzka
+    if v >= 0.28:
+        return 1          # okręgowa
+    return 0              # lokalne
+
+
+def _gk_quality(_matches, df):
+    """Jakość bramkarska: stracone na PEŁNY mecz kategorii, ważone wynikiem meczu,
+    porównane percentylowo WŚRÓD bramkarzy tego samego poziomu (mniej straconych = wyżej)."""
+    m = _matches.copy()
+    m["_min"] = pd.to_numeric(m["minutes"], errors="coerce").fillna(0)
+    m["_lg"] = pd.to_numeric(m.get("lost_goals"), errors="coerce").fillna(0)
+    m["_mlen"] = m.groupby("match_id")["_min"].transform("max").clip(lower=30)
+    valid = m["_min"] >= 0.5 * m["_mlen"]
+    m["_cf"] = (m["_lg"] * m["_mlen"] / m["_min"].clip(lower=1)).where(valid)
+    # przegrana obciąża bramkarza mniej (często ciągnie słabszy zespół); wygrana/remis — pełniej
+    w = m["match_result"].map({"wygrana": 1.0, "remis": 0.9, "porażka": 0.6}).fillna(0.8)
+    m["_w"] = w.where(valid, 0.0)
+    g = m.groupby("player_id")
+    conceded = g.apply(lambda x: (x["_cf"] * x["_w"]).sum() / max(x["_w"].sum(), 1e-9))
+    m["_bucket"] = m["play_name"].map(_poziom_nazwy).map(_lvl_bucket)
+    dom = (m.groupby(["player_id", "_bucket"])["_min"].sum().reset_index()
+           .sort_values("_min").groupby("player_id").tail(1).set_index("player_id")["_bucket"])
+    q = pd.DataFrame({"c": conceded, "b": dom})
+    q["Q"] = q.groupby("b")["c"].transform(lambda x: (-x).rank(pct=True))
+    return df["player_id"].map(q["Q"]).fillna(0.5), df["player_id"].map(conceded)
+
+
 def _poziom_nazwy(play_name):
     """Szczebel rozgrywek z nazwy (0.2 lokalne … 1.0 CLJ) — odpowiednik leagueMultiplier."""
     s = str(play_name).lower()
@@ -831,7 +863,15 @@ def build(_stats, _matches):
 
     if PM_RANK_MODE == "talent":
         # mix: jakość (league-aware) + poziom (CLJ/seniorzy/skok) + wolumen
-        Q = df["pm_quality"].rank(pct=True)
+        if "lost_goals" in _matches.columns:
+            _Qgk, _conc = _gk_quality(_matches, df)   # zawsze licz stracone/mecz — do KOLUMNY
+            df["gk_stracone_mecz"] = _conc
+        else:
+            _Qgk = None
+        if (_secret("PM_BRAMKARZ_JAKOSC", "") in ("1", "true", "True")) and _Qgk is not None:
+            Q = _Qgk                                  # OPCJONALNIE: stracone wpływają na wskaźnik
+        else:
+            Q = df["pm_quality"].rank(pct=True)
         if _secret("PM_POZIOM_Z_NAZWY", "") in ("1", "true", "True"):
             # poziom = minutowo-ważony szczebel z nazwy rozgrywek (CLJ 1.0 … lokalne 0.2)
             _mm = _matches.copy()
@@ -1361,6 +1401,7 @@ def main():
             "mecze_play": "Mecze (liga)", "mecze_total": "Mecze (total)",
             "gole_play": "Gole (liga)", "gole_total": "Gole (total)",
             "kartki_total": "Kartki", "senior_minutes": "Min. seniorzy",
+            "gk_stracone_mecz": "Str./mecz",
             "clj_minutes": "Min. CLJ"}
 
     if sel_card:
@@ -1411,6 +1452,7 @@ def main():
             "Score (liga)": st.column_config.NumberColumn(format="%.3f"),
             "Score (total)": st.column_config.NumberColumn(format="%.3f"),
             "Poziom": st.column_config.NumberColumn(format="%.1f"),
+            "Str./mecz": st.column_config.NumberColumn(format="%.2f", help="stracone bramki na pełny mecz kategorii (ważone wynikiem) — niżej = lepiej; zależy też od siły zespołu"),
             "Premia": st.column_config.NumberColumn(format="%.2f"),
             "Znaczniki": st.column_config.TextColumn(
                 help="↑ gra ze starszymi · 🪑 w kadrze seniorów · ⚽ minuty w seniorach · 🏅 minuty w CLJ")})
