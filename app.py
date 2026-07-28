@@ -690,6 +690,17 @@ _TIER_PATS = [
 ]
 
 
+def _norm_play(pn):
+    """Scal rundy/sezony do jednej nazwy rozgrywek: 'I liga wojewódzka C2 Trampkarz (jesień)' -> bez rundy."""
+    s = str(pn)
+    s = re.sub(r'[\"\'""„"]', '', s)
+    s = re.sub(r'\(\s*(?:rw|rj|runda\s+\w+|jesie[nń]\w*|wiosn\w*)\s*\)', '', s, flags=re.I)
+    s = re.sub(r'\b(?:runda\s+(?:jesienn\w*|wiosenn\w*)|jesie[nń]\w*|wiosn\w*|rw|rj)\b', '', s, flags=re.I)
+    s = re.sub(r'\bgrupa\s+\w+\b', '', s, flags=re.I)
+    s = re.sub(r'\s{2,}', ' ', s).strip(' -–:·')
+    return s
+
+
 def _poziom_nazwy(play_name):
     """Szczebel rozgrywek z nazwy (0.2 lokalne … 1.0 CLJ) — odpowiednik leagueMultiplier."""
     s = str(play_name).lower()
@@ -863,6 +874,18 @@ def build(_stats, _matches):
 
     # === ZAKRES dla dedykowanych wdrożeń (sekrety) — np. almanach_bramkarze ===
     # keeper_count = liczba meczów w bramce (z eksportu stats). Bramkarz = dominująco w bramce.
+    # DOMINUJĄCY klub/drużyna/rozgrywki wg minut (nie pierwszy z brzegu) + scalone rundy
+    if "play_name" in _matches.columns:
+        _mp = _matches.copy()
+        _mp["play_name"] = _mp["play_name"].map(_norm_play)
+        _mp["_min"] = pd.to_numeric(_mp["minutes"], errors="coerce").fillna(0)
+        for _col in ("club_name", "team_name", "play_name"):
+            if _col in _mp.columns:
+                _dom = (_mp.groupby(["player_id", _col])["_min"].sum().reset_index()
+                        .sort_values("_min").groupby("player_id").tail(1)
+                        .set_index("player_id")[_col])
+                df[_col] = df["player_id"].map(_dom).fillna(df.get(_col))
+
     if "keeper_count" in _stats.columns:
         kc = (pd.to_numeric(_stats["keeper_count"], errors="coerce").fillna(0)
               .groupby(_stats["player_id"]).sum())
@@ -892,13 +915,16 @@ def build(_stats, _matches):
     # rocznik jako PRZEDZIAŁ (od–do) zamiast etykiety pewności; nigdy nie pokazujemy "błędny"
     if _secret("PM_ROCZNIK_JAKO_PRZEDZIAL", "") in ("1", "true", "True"):
         def _rocz_disp(r):
-            w = str(r.get("rocznik_widelki", "") or "")
+            w = str(r.get("rocznik_widelki", "") or "").replace("-", "–")
             p = str(r.get("rocznik_pewnosc", "") or "").lower()
-            if "-" in w:
-                return w                                  # przedział, np. 2012–2013
-            if p in ("pewny", "potwierdzony") or p.startswith("pewny"):
+            if p.startswith("pewny") or p == "potwierdzony":
                 return "potwierdzony"
-            return "szacowany"                            # w tym dawny "bledny" — bez ujawniania
+            if "–" in w:
+                return w                                  # przedział, np. 2012–2013
+            y = pd.to_numeric(r.get("est_birth_year"), errors="coerce")
+            if pd.notna(y):
+                return f"{int(y) - 1}–{int(y)}"            # niepewny bez jawnego przedziału → ±1
+            return "—"
         if "rocznik_pewnosc" in df.columns:
             df["rocznik_pewnosc"] = df.apply(_rocz_disp, axis=1)
     return df
@@ -1441,6 +1467,10 @@ def main():
     # ---- PODSUMOWANIE SEZONU (per rozgrywki) — zawsze widoczne, jak mecze ----
     if sel_pid:
         who_r = f.loc[f["player_id"] == sel_pid, "zawodnik"].iloc[0]
+        if st.button("← Wróć do listy wszystkich zawodników", key=K("back_bottom"),
+                     use_container_width=True):
+            st.session_state.pop("sel_pid", None)
+            st.rerun()
         st.markdown(f"### 📊 Podsumowanie sezonu: {who_r} — mecze / minuty / gole per liga")
         pv = matches[matches["player_id"] == sel_pid].copy()
     else:
