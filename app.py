@@ -701,6 +701,39 @@ def _norm_play(pn):
     return s
 
 
+def _potencjal_clj(clj_min, poziom, min_total, stracone, gra_starsi, play):
+    """Flaga + komentarz: potencjał bramkarza na poziom CLJ U-15 (cel naboru).
+    Zwraca (flaga, komentarz). Roczniki 2012/2013 w CLJ grają w górę → każde min. CLJ to sygnał."""
+    clj_min = float(clj_min or 0)
+    poziom = float(poziom or 0)
+    min_total = float(min_total or 0)
+    s = float(stracone) if stracone == stracone else None   # NaN-safe
+    komplet = min_total >= 1300
+    malo_str = (s is not None and s < 1.5)
+    liga = str(play or "").strip()
+
+    if clj_min >= 400:
+        return ("✅ Ograny w CLJ",
+                f"Gra już w CLJ ({int(clj_min)} min) — sprawdzony na docelowym poziomie. "
+                "Wysoka półka, ale zwykle trudny do pozyskania.")
+    if clj_min > 0:
+        return ("⚠️ Liznął CLJ",
+                f"Tylko {int(clj_min)} min w CLJ — talent grający w górę, ale mały wymiar gry. "
+                "Możliwy niedosyt → warto sprawdzić dostępność.")
+    if poziom >= 0.70 and komplet:
+        c = f", mało traci ({s:.2f}/mecz)" if malo_str else ""
+        return ("🎯 Kandydat na CLJ",
+                f"Komplet minut w wysokiej lidze wojewódzkiej{c}, brak CLJ — "
+                "realny kandydat na krok wyżej.")
+    if 0.50 <= poziom < 0.70 and komplet and malo_str:
+        return ("💎 Perła z niższej ligi",
+                f"Niższy szczebel, ale dużo minut i mało straconych ({s:.2f}/mecz) — wart obserwacji.")
+    if gra_starsi and komplet:
+        return ("↑ Grany w górę",
+                "Ogrywany powyżej rocznika z kompletem minut — sygnał potencjału, obserwować.")
+    return ("", "")
+
+
 def _lvl_bucket(v):
     if v >= 0.88:
         return 3          # CLJ / makroregion
@@ -967,6 +1000,14 @@ def build(_stats, _matches):
             return "—"
         if "rocznik_pewnosc" in df.columns:
             df["rocznik_pewnosc"] = df.apply(_rocz_disp, axis=1)
+
+    # Potencjał na CLJ U-15 (flaga + komentarz) — wdrożenie bramkarskie
+    if _secret("PM_TYLKO_BRAMKARZE", "") in ("1", "true", "True"):
+        _pot = df.apply(lambda r: _potencjal_clj(
+            r.get("clj_minutes"), r.get("Poziom"), r.get("min_total"),
+            r.get("gk_stracone_mecz"), r.get("gra_ze_starszymi"), r.get("play_name")), axis=1)
+        df["potencjal"] = [p[0] for p in _pot]
+        df["komentarz"] = [p[1] for p in _pot]
     return df
 
 
@@ -1284,6 +1325,10 @@ def main():
         f_pluca = r4[1].checkbox(f"🫁 Żelazne płuca (>{pluca_prog}')", key=K("f_pluca"))
         f_futsal = r4[2].checkbox("🥅 Halowiec (futsal)", key=K("f_futsal"))
         f_skok2 = r4[3].checkbox("↑↑ Skok 2+ roczniki", key=K("f_skok2"))
+        f_potencjal = False
+        if "potencjal" in data.columns and (data["potencjal"].astype(str) != "").any():
+            f_potencjal = st.checkbox("🎯 Tylko z potencjałem na CLJ (kandydaci / liznęli CLJ / perły)",
+                                      key=K("f_pot"))
         km_max = 0
         if "km_do_opola" in data.columns and data["km_do_opola"].notna().any():
             _hi = int(pd.to_numeric(data["km_do_opola"], errors="coerce").max() or 0)
@@ -1300,6 +1345,9 @@ def main():
         f = f[f["zawodnik"].str.contains(q, case=False, na=False)]
     if f_club:
         f = f[f["club_name"].isin(f_club)]
+    if f_potencjal:
+        f = f[f["potencjal"].astype(str).isin(
+            ["✅ Ograny w CLJ", "⚠️ Liznął CLJ", "🎯 Kandydat na CLJ", "💎 Perła z niższej ligi"])]
     if f_lg:
         f = f[f["_leagues"].apply(lambda s: bool(s & set(f_lg)) if isinstance(s, set) else False)]
     if f_pl:
@@ -1388,7 +1436,8 @@ def main():
 
     ft = f.copy()
     ft["Znaczniki"] = ft.apply(znaczniki, axis=1)
-    cmap = {"Lp": "#", "zawodnik": L["player_one"], "Znaczniki": "Znaczniki", "region_name": "Województwo",
+    cmap = {"Lp": "#", "zawodnik": L["player_one"], "potencjal": "Potencjał", "Znaczniki": "Znaczniki",
+            "region_name": "Województwo",
             "team_name": "Drużyna",
             "club_name": "Klub", "est_birth_year": "Rocznik",
             "rocznik_pewnosc": ("Rocznik (szac.)"
@@ -1402,7 +1451,7 @@ def main():
             "gole_play": "Gole (liga)", "gole_total": "Gole (total)",
             "kartki_total": "Kartki", "senior_minutes": "Min. seniorzy",
             "gk_stracone_mecz": "Str./mecz",
-            "clj_minutes": "Min. CLJ"}
+            "clj_minutes": "Min. CLJ", "komentarz": "Komentarz"}
 
     if sel_card:
         who = f.loc[f["player_id"] == sel_card, "zawodnik"].iloc[0]
